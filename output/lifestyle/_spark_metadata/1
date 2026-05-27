@@ -1,0 +1,4 @@
+v1
+{"path":"file:///D:/CDAC%20Projects/sleep-pipeline/output/lifestyle/part-00000-5e0eb9a9-6b97-4349-a89a-f00b4503fb6b-c000.snappy.parquet","size":5098,"isDir":false,"modificationTime":1779845433442,"blockReplication":1,"blockSize":33554432,"action":"add"}
+{"path":"file:///D:/CDAC%20Projects/sleep-pipeline/output/lifestyle/part-00001-b3115745-0f0e-472b-b462-00b961d1a3b8-c000.snappy.parquet","size":5085,"isDir":false,"modificationTime":1779845433536,"blockReplication":1,"blockSize":33554432,"action":"add"}
+{"path":"file:///D:/CDAC%20Projects/sleep-pipeline/output/lifestyle/part-00002-98e78c65-51a2-4d7e-a3ff-12180c87bc67-c000.snappy.parquet","size":5106,"isDir":false,"modificationTime":1779845433503,"blockReplication":1,"blockSize":33554432,"action":"add"}
