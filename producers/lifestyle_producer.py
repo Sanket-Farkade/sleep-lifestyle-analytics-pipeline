@@ -1,12 +1,22 @@
-import json, time, random, sys, os
+import json
+import time
+import random
+import sys
+import os
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from kafka import KafkaProducer
-from utils.data_generator import gen_user_id, gen_lifestyle_record
+from utils.data_generator import (
+    get_user_pool,
+    gen_lifestyle_record
+)
 
-TOPIC    = "sleep-lifestyle"
-INTERVAL = 2          # seconds between messages
-USERS    = [gen_user_id() for _ in range(50)]  # pool of 50 synthetic users
+TOPIC = "sleep-lifestyle"
+INTERVAL = 2  # seconds between messages
+
+# Pool of synthetic users
+USERS = get_user_pool(200)
 
 producer = KafkaProducer(
     bootstrap_servers="localhost:9092",
@@ -15,13 +25,30 @@ producer = KafkaProducer(
 )
 
 print(f"[lifestyle_producer] streaming to topic '{TOPIC}' every {INTERVAL}s ...")
+
 try:
     while True:
-        user_id = random.choice(USERS)
-        record  = gen_lifestyle_record(user_id)
-        producer.send(TOPIC, key=user_id, value=record)
-        print(f"  → sent: user={user_id[:8]}... sleep={record['sleep_duration_hrs']}h quality={record['sleep_quality']}")
+        # Pick full user object
+        user = random.choice(USERS)
+
+        # Generate record using full user dict
+        record = gen_lifestyle_record(user)
+
+        # Send using user_id as Kafka key
+        producer.send(
+            TOPIC,
+            key=user["user_id"],
+            value=record
+        )
+
+        print(
+            f" → sent: user={user['user_id'][:8]}... "
+            f"sleep={record['sleep_duration_hrs']}h "
+            f"quality={record['sleep_quality']}"
+        )
+
         time.sleep(INTERVAL)
+
 except KeyboardInterrupt:
     print("Stopped.")
     producer.close()

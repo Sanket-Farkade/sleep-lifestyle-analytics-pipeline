@@ -35,6 +35,7 @@ lifestyle_schema = StructType([
     StructField("stress_level",               IntegerType()),
     StructField("mood_score",                 IntegerType()),
     StructField("screen_time_before_bed_mins",IntegerType()),
+    StructField("persona",                     StringType()),
 ])
 
 personal_schema = StructType([
