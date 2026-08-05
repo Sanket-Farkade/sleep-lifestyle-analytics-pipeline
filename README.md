@@ -1,50 +1,53 @@
 # Real-Time Sleep & Lifestyle Health Analytics Pipeline
 
-A production-grade data engineering pipeline that streams synthetic health data through Apache Kafka, processes it with PySpark Structured Streaming, stores enriched Parquet files in AWS S3, and visualises insights on a live Plotly Dash dashboard.
+A production-grade data engineering pipeline that streams synthetic health data through **Apache Kafka**, processes it with **PySpark Structured Streaming**, stores enriched Parquet files locally (or on AWS S3), and visualises insights on a **live Plotly Dash dashboard** that auto-refreshes every 30 seconds.
+
+> **Portfolio note:** A static Power BI export (`.pbix`) can be generated any time using `python utils/export_to_csv.py` — see the [Power BI section](#power-bi-export) below.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         DATA GENERATION                             │
-│  lifestyle_producer.py    personal_producer.py    profession_producer.py  │
-│       (every 2s)               (every 5s)               (every 8s)  │
-│  7 Persona-based synthetic users — correlated field ranges          │
-└──────────┬─────────────────────┬──────────────────────┬─────────────┘
-           │                     │                      │
-           ▼                     ▼                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                          APACHE KAFKA                               │
-│   Topic: sleep-lifestyle   Topic: personal-info   Topic: profession │
-│   3 partitions each        Replication factor 1                     │
-│   KRaft mode (no Zookeeper) — Kafka 3.9.2 / Scala 2.12             │
-└──────────────────────────────┬──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        DATA GENERATION                           │
+│  lifestyle_producer.py   personal_producer.py   profession_producer.py │
+│      (every 2s)               (every 5s)              (every 8s) │
+│  7 Persona-based synthetic users — correlated field ranges       │
+│  200 pre-generated users, each with a fixed persona + BMI        │
+└──────────┬──────────────────────┬─────────────────────┬──────────┘
+           │                      │                     │
+           ▼                      ▼                     ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                         APACHE KAFKA                             │
+│  Topic: sleep-lifestyle  Topic: personal-info  Topic: profession │
+│  3 partitions each       KRaft mode (no Zookeeper)               │
+│  Kafka 3.6 via Docker    bitnami/kafka image                     │
+└──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      PYSPARK STRUCTURED STREAMING                   │
-│   Reads all 3 topics in parallel micro-batches (30s trigger)        │
-│   Schema validation → Data cleaning → 26 derived transformations    │
-│   Writes Snappy-compressed Parquet — append mode                    │
-│   Checkpoints ensure exactly-once semantics                         │
-└──────────────────────────────┬──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                  PYSPARK STRUCTURED STREAMING                    │
+│  Reads 3 topics in parallel — 30s micro-batch trigger            │
+│  Schema validation → Data cleaning → 26 derived columns          │
+│  Snappy-compressed Parquet, append mode                          │
+│  dropDuplicates on [user_id, timestamp]                          │
+└──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                           AWS S3 / LOCAL DISK                       │
-│   output/lifestyle/    output/personal/    output/profession/       │
-│   checkpoints/lifestyle/  checkpoints/personal/  checkpoints/profession/ │
-└──────────────────────────────┬──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    LOCAL DISK / AWS S3                           │
+│  output/lifestyle/   output/personal/   output/profession/       │
+└──────────────────────────────┬───────────────────────────────────┘
                                │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        PLOTLY DASH DASHBOARD                        │
-│   15 interactive charts — auto-refresh every 45s                    │
-│   Reads Parquet from S3 (cloud) or local folder (local)             │
-│   Runs on localhost:8050                                            │
-└─────────────────────────────────────────────────────────────────────┘
+                    ┌──────────┴──────────┐
+                    ▼                     ▼
+        ┌─────────────────┐    ┌──────────────────────┐
+        │  Plotly Dash    │    │  Power BI Desktop     │
+        │  localhost:8050 │    │  (CSV export → .pbix) │
+        │  auto-refresh   │    │  portfolio artifact   │
+        │  every 30s      │    └──────────────────────┘
+        └─────────────────┘
 ```
 
 ---
@@ -53,19 +56,16 @@ A production-grade data engineering pipeline that streams synthetic health data 
 
 | Tool | Version | Role |
 |---|---|---|
-| Apache Kafka | 3.9.2 (KRaft) | Event streaming — 3 topics, 3 partitions each |
-| PySpark | 3.5.3 | Structured Streaming, cleaning, transformations |
-| Kafka-Spark Connector | spark-sql-kafka-0-10_2.12:3.5.3 | Scala 2.12 — must match PySpark exactly |
-| hadoop-aws | 3.3.4 | S3A filesystem connector for Spark |
-| aws-java-sdk-bundle | 1.12.262 | AWS SDK — compatible with hadoop-aws 3.3.4 |
-| Java | 17 | Required by PySpark 3.5.x |
+| Apache Kafka | 3.6 (KRaft) | Event streaming — 3 topics, 3 partitions |
+| PySpark | 3.5.3 | Structured Streaming, transformations |
+| spark-sql-kafka connector | `2.12:3.5.3` | Scala 2.12 — must match PySpark build |
+| Docker / bitnami/kafka | 3.6 | Local Kafka, no Zookeeper |
 | Python | 3.x | Producers, dashboard, data generation |
-| kafka-python | latest | Kafka producer client |
-| Faker | latest | Realistic synthetic field generation |
-| AWS EC2 | t3.micro x2 | Kafka instance + Spark instance |
-| AWS S3 | — | Parquet output + Spark checkpoints |
-| Plotly Dash | latest | Interactive dashboard |
-| boto3 | latest | S3 reads from dashboard |
+| kafka-python | 2.0.2 | Producer client |
+| Faker | 24.x | Realistic name/location generation |
+| Plotly Dash | 2.17 | Live interactive dashboard |
+| Power BI Desktop | latest | Static .pbix portfolio export |
+| pyarrow | 14+ | Parquet read/write |
 
 ---
 
@@ -75,30 +75,95 @@ A production-grade data engineering pipeline that streams synthetic health data 
 sleep-pipeline/
 │
 ├── utils/
-│   └── data_generator.py          # Persona-based synthetic data — 7 personas, 200 users
+│   ├── data_generator.py      # 7 personas, 200 users, correlated fields
+│   └── export_to_csv.py       # Parquet → CSV for Power BI Desktop
 │
 ├── producers/
-│   ├── lifestyle_producer.py      # Streams sleep/lifestyle to sleep-lifestyle topic (2s)
-│   ├── personal_producer.py       # Streams demographics to personal-info topic (5s)
-│   └── profession_producer.py     # Streams work data to profession topic (8s)
+│   ├── lifestyle_producer.py  # sleep-lifestyle topic (2s interval)
+│   ├── personal_producer.py   # personal-info topic (5s interval)
+│   └── profession_producer.py # profession topic (8s interval)
 │
 ├── spark/
-│   └── stream_processor.py        # Full PySpark streaming job — clean + transform + write
+│   └── stream_processor.py    # PySpark job — clean + 26 columns + write
 │
-├── output/                        # Local Parquet output (local version only)
+├── output/                    # Parquet output (auto-created)
 │   ├── lifestyle/
 │   ├── personal/
 │   └── profession/
 │
-├── checkpoints/                   # Spark checkpoints (local version only)
-│   ├── lifestyle/
-│   ├── personal/
-│   └── profession/
+├── checkpoints/               # Spark checkpoints (auto-created)
 │
-├── dashboard.py                   # Plotly Dash dashboard — 15 charts, S3 or local reads
-├── docker-compose.yml             # Kafka + Zookeeper for local version
+├── powerbi_export/            # CSV export for Power BI (auto-created)
+│
+├── dashboard.py               # Plotly Dash — 18 charts, 30s refresh
+├── docker-compose.yml         # KRaft Kafka (no Zookeeper)
+├── start.bat                  # One-command Windows launcher
+├── stop.bat                   # Stops Kafka + shows teardown instructions
+├── requirements.txt
 └── README.md
 ```
+
+---
+
+## Quickstart (Windows Local)
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (running)
+- Python 3.9+
+- Java 17 ([download](https://adoptium.net/))
+- `winutils.exe` in `C:\hadoop\bin\` ([download](https://github.com/cdarlint/winutils))
+
+### One-command launch
+```bat
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Start everything
+start.bat
+```
+
+`start.bat` will:
+1. Start Kafka via Docker Compose
+2. Create the 3 Kafka topics
+3. Open 3 producer windows
+4. Open the Spark streaming window
+5. Open the dashboard after the first Parquet batch
+
+**Dashboard:** http://localhost:8050 (opens automatically after ~40s)
+
+### Verify data is flowing
+After ~1 minute, you should see:
+```bat
+# Check Kafka messages (run in any terminal)
+docker exec sleep-kafka kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic sleep-lifestyle --max-messages 3
+```
+
+Expected output: 3 JSON records with `user_id`, `sleep_duration_hrs`, etc.
+
+### Shutdown
+```bat
+stop.bat
+```
+
+---
+
+## Power BI Export
+
+After the pipeline has been running for at least a few minutes:
+
+```bat
+python utils/export_to_csv.py
+```
+
+This creates `powerbi_export/lifestyle.csv`, `personal.csv`, `profession.csv`.
+
+**In Power BI Desktop:**
+1. Get Data → Text/CSV → select `lifestyle.csv` → Load
+2. Repeat for `personal.csv` and `profession.csv`
+3. Model view → create relationships on `user_id`
+4. Build visuals and save as `.pbix`
 
 ---
 
@@ -110,22 +175,24 @@ sleep-pipeline/
 | user_id | string | UUID — Kafka partition key |
 | timestamp | string | UTC ISO timestamp |
 | sleep_duration_hrs | double | Hours slept (2.0–14.0) |
-| sleep_quality | int | Self-rated 1–10 |
+| sleep_quality | int | 1–10 — correlated with duration |
 | bedtime / wake_time | string | HH:MM format |
 | steps | int | Daily step count |
 | water_intake_L | double | Litres consumed |
-| caffeine_mg | int | Milligrams consumed |
+| caffeine_mg | int | Milligrams (steps of 25) |
 | alcohol_units | int | Units consumed |
 | exercise_mins | int | Minutes of exercise |
-| bmi | double | Body mass index |
-| heart_rate | int | Resting BPM |
-| stress_level | int | Self-rated 1–10 |
-| mood_score | int | Self-rated 1–10 |
-| screen_time_before_bed_mins | int | Minutes of screen use before sleep |
+| bmi | double | Fixed per user — consistent across topics |
+| heart_rate | int | Correlated with BMI + stress level |
+| stress_level | int | 1–10 |
+| mood_score | int | 1–10 |
+| screen_time_before_bed_mins | int | Minutes before sleep |
 | persona | string | Assigned persona type |
 
 ### personal-info topic
 `user_id, timestamp, full_name, age, gender, height_cm, weight_kg, blood_type, country, city, smoking_status, chronic_conditions, on_medications, sleep_disorder`
+
+> `weight_kg` is derived from the user's fixed BMI + height (with ±0.5 kg daily noise) — consistent with the lifestyle topic.
 
 ### profession topic
 `user_id, timestamp, job_title, industry, company_size, work_hours_per_day, remote_onsite, shift_type, work_stress_score, screen_time_hrs, income_bracket, commute_mins, work_life_balance, meetings_per_day`
@@ -134,226 +201,100 @@ sleep-pipeline/
 
 ## Persona-Based Data Generation
 
-Raw Faker generates uncorrelated fields — a 22-year-old CEO with 0 stress sleeping 11 hours. This pipeline uses **7 correlated personas** where each field range co-varies realistically:
-
 | Persona | Sleep | Stress | Key Traits |
 |---|---|---|---|
-| stressed_tech_worker | 4.5–6.5h | 7–10 | High caffeine, late bedtime, low exercise |
-| healthy_active_adult | 7.0–9.0h | 1–4 | High steps, low alcohol, good hydration |
-| night_shift_worker | 5.0–7.0h | 5–8 | Irregular schedule, high screen time |
-| senior_executive | 5.5–7.0h | 6–9 | Long work hours, many meetings, high income |
-| student_young_adult | 5.0–9.0h | 4–8 | Irregular, high screen time, low income |
+| stressed_tech_worker | 4.5–6.5h | 7–10 | High caffeine, late bedtime, elevated HR |
+| healthy_active_adult | 7.0–9.0h | 1–4 | High steps, athletic HR (50–68 bpm) |
+| night_shift_worker | 5.0–7.0h | 5–8 | Day sleeper, high caffeine, irregular |
+| senior_executive | 5.5–7.0h | 6–9 | Long hours, many meetings, high income |
+| student_young_adult | 5.0–9.0h | 4–8 | Irregular, high screen time, max 4 alcohol units |
 | retired_senior | 6.0–8.5h | 1–4 | Low stress, chronic conditions likely |
-| finance_professional | 5.0–7.0h | 6–9 | Long hours, high alcohol, high income |
+| finance_professional | 5.0–7.0h | 6–9 | Long hours, elevated HR (70–95 bpm) |
 
-200 synthetic users are pre-generated at startup. Each user is assigned a fixed persona — so the same `user_id` consistently shows correlated values across all three Kafka topics.
-
----
-
-## PySpark Transformations
-
-### Lifestyle Stream — 10 derived columns
-| Column | Logic | Significance |
-|---|---|---|
-| sleep_category | < 6h insufficient, < 7h borderline, ≤ 9h optimal, > 9h excessive | CDC clinical sleep thresholds |
-| sleep_efficiency_score | (duration/9 × 50) + (quality/10 × 50) | Blends objective hours with subjective quality |
-| wellbeing_index | (sleep_quality + mood_score + (11 − stress)) / 3 | Primary composite wellness KPI |
-| stress_tier | 1–3 low, 4–6 moderate, 7–10 high | Buckets raw score for grouping |
-| bmi_category | WHO thresholds: underweight/normal/overweight/obese | Standard clinical classification |
-| activity_level | steps + exercise cross-field rule | Distinguishes high steps vs actual exercise |
-| high_stimulant_flag | caffeine ≥ 200mg AND screen_before_bed ≥ 60 mins | Compound sleep risk flag |
-| hydration_status | < 1.5L dehydrated, < 2.5L adequate, ≥ 2.5L well_hydrated | Daily intake classification |
-| alcohol_risk_flag | ≥ 4 units (NHS binge threshold) | Session-level alcohol risk |
-| bedtime_shift | 20–22h early, 23h normal, 0–1h late, else very_late | Chronotype classification |
-
-### Profession Stream — 9 derived columns
-| Column | Logic | Significance |
-|---|---|---|
-| burnout_risk_index | (hours/16×40) + (stress/10×40) + ((10−wlb)/10×20) | Weighted 0–100 burnout composite |
-| burnout_risk_label | ≥ 70 critical, ≥ 50 high, ≥ 30 moderate, else low | Actionable category from index |
-| overwork_flag | work_hours > 10 | Boolean — drives overwork % chart |
-| work_intensity_score | (hours×50) + (meetings×25) + (screen×25) | Separates deep work from meeting load |
-| stress_tier | Same bucketing from work_stress_score | Industry stress comparison |
-| meeting_load | 0–2 light, 3–5 moderate, > 5 heavy | Meeting frequency classification |
-| commute_burden | 0=none, ≤30=low, ≤60=moderate, >60=high | Commute impact on work-life balance |
-| income_tier | Ordinal 1–6 from income_bracket string | Enables numeric sorting and ranking |
-| screen_overuse_flag | screen_time_hrs > 8 | Workplace screen exposure risk |
-
-### Personal Stream — 7 derived columns
-`bmi_derived, bmi_category, age_group (18-24/25-34/35-49/50-64/65+), life_stage, health_risk_score (0–3 additive), has_sleep_disorder, is_smoker`
+**Realism guarantees:**
+- Each user has a **fixed BMI** drawn once at startup — both the lifestyle and personal topic weight fields are derived from this same value
+- Heart rate is **correlated** with both BMI and stress (not random)
+- Sleep quality is **softly correlated** with sleep duration within persona range
+- Senior executive industry is drawn **per user** (not globally at import time)
 
 ---
 
-## Local Setup
+## PySpark Derived Columns (26 total)
 
-### Prerequisites
-- Docker Desktop (Windows)
-- Python 3.x
-- Java 17
-- winutils.exe in `C:\hadoop\bin\` (required for Spark on Windows)
-
-### Steps
-
-```powershell
-# 1. Install dependencies
-pip install kafka-python faker pyspark==3.5.3 dash plotly pandas pyarrow boto3 dash-bootstrap-components
-
-# 2. Start Kafka
-docker-compose up -d
-
-# 3. Create topics
-docker exec -it <kafka-container> kafka-topics --create --topic sleep-lifestyle --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
-docker exec -it <kafka-container> kafka-topics --create --topic personal-info  --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
-docker exec -it <kafka-container> kafka-topics --create --topic profession      --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
-
-# 4. Run producers (3 separate terminals)
-python producers/lifestyle_producer.py
-python producers/personal_producer.py
-python producers/profession_producer.py
-
-# 5. Run Spark streaming job
-spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 spark/stream_processor.py
-
-# 6. Run dashboard (after ~30s when first Parquet files appear)
-python dashboard.py
-# Open: http://localhost:8050
-```
-
----
-
-## Cloud Setup (AWS)
-
-### Infrastructure
-- **EC2 #1** — Kafka instance: t3.micro, Ubuntu 24.04 LTS, security group ports 22 + 9092 + 19092
-- **EC2 #2** — Spark instance: t3.micro, Ubuntu 24.04 LTS, 15GB storage, IAM role with S3 access
-- **S3 bucket** — stores Parquet output and Spark checkpoints
-
-### EC2 #1 — Kafka Setup
-
-```bash
-# Java 17
-sudo apt update && sudo apt install -y openjdk-17-jdk-headless
-
-# Download Kafka
-wget https://archive.apache.org/dist/kafka/3.9.2/kafka_2.12-3.9.2.tgz
-tar -xzf kafka_2.12-3.9.2.tgz && sudo mv kafka_2.12-3.9.2 /opt/kafka
-
-# Create user and set ownership
-sudo useradd --system --no-create-home --shell /bin/false kafka
-sudo chown -R kafka:kafka /opt/kafka
-
-# Tune heap for t3.micro (1GB RAM)
-sudo sed -i 's/export KAFKA_HEAP_OPTS=.*/export KAFKA_HEAP_OPTS="-Xmx512m -Xms256m"/' \
-    /opt/kafka/bin/kafka-server-start.sh
-
-# Format storage and start
-CLUSTER_ID=$(sudo -u kafka /opt/kafka/bin/kafka-storage.sh random-uuid)
-sudo -u kafka /opt/kafka/bin/kafka-storage.sh format \
-    -t $CLUSTER_ID -c /opt/kafka/config/kraft/server.properties
-sudo systemctl enable kafka && sudo systemctl start kafka
-```
-
-**`/opt/kafka/config/kraft/server.properties` key settings:**
-```properties
-process.roles=broker,controller
-node.id=1
-controller.quorum.voters=1@localhost:9093
-listeners=INTERNAL://0.0.0.0:19092,EXTERNAL://0.0.0.0:9092,CONTROLLER://localhost:9093
-advertised.listeners=INTERNAL://localhost:19092,EXTERNAL://<EC2-PUBLIC-IP>:9092
-listener.security.protocol.map=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-inter.broker.listener.name=INTERNAL
-controller.listener.names=CONTROLLER
-log.dirs=/opt/kafka/kraft-logs
-```
-
-> **Important:** `advertised.listeners` must always be the current EC2 public IP. EC2 public IPs change on stop/start.
-
-### EC2 #2 — Spark Setup
-
-```bash
-# Install PySpark and S3 JARs
-pip3 install pyspark==3.5.3 --break-system-packages
-
-SPARK_JARS=$(python3 -c "import pyspark,os; print(os.path.join(os.path.dirname(pyspark.__file__),'jars'))")
-wget -P $SPARK_JARS https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar
-wget -P $SPARK_JARS https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
-
-# Run Spark
-spark-submit \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 \
-  --driver-memory 700m \
-  --conf spark.sql.shuffle.partitions=4 \
-  ~/sleep-pipeline/spark/stream_processor.py
-```
-
-### Dashboard (Windows — reads from S3)
-
-```powershell
-# Configure AWS credentials
-aws configure
-
-# Run dashboard
-python dashboard.py
-# Open: http://localhost:8050
-```
-
----
-
-## Dashboard Charts
-
-| Chart | Source |
+### Lifestyle (10)
+| Column | Logic |
 |---|---|
-| 5 KPI cards (records, sleep, quality, stress, wellbeing) | lifestyle |
+| sleep_category | insufficient / borderline / optimal / excessive (CDC 4-tier) |
+| sleep_efficiency_score | (duration/9 × 50) + (quality/10 × 50) |
+| wellbeing_index | (sleep_quality + mood_score + (11−stress)) / 3 |
+| stress_tier | low / moderate / high |
+| bmi_category | WHO: underweight / normal / overweight / obese |
+| activity_level | sedentary / lightly_active / active / very_active |
+| high_stimulant_flag | caffeine ≥200mg AND screen ≥60 min |
+| hydration_status | dehydrated / adequate / well_hydrated |
+| alcohol_risk_flag | ≥4 units (NHS binge threshold) |
+| bedtime_shift | early / normal / late / very_late |
+
+### Profession (9)
+| Column | Logic |
+|---|---|
+| burnout_risk_index | weighted 0–100: hours(40%) + stress(40%) + wlb(20%) |
+| burnout_risk_label | low / moderate / high / critical |
+| overwork_flag | work_hours > 10 |
+| work_intensity_score | hours×50 + meetings×25 + screen×25 |
+| stress_tier | low / moderate / high |
+| meeting_load | light / moderate / heavy |
+| commute_burden | none / low / moderate / high |
+| income_tier | ordinal 1–6 |
+| screen_overuse_flag | screen_time_hrs > 8 |
+
+### Personal (7)
+`bmi_derived, bmi_category, age_group, life_stage, health_risk_score (0–3), has_sleep_disorder, is_smoker`
+
+---
+
+## Dashboard Charts (18)
+
+| Chart | Data Source |
+|---|---|
+| 5 KPI cards: records, sleep, quality, stress, wellbeing | lifestyle |
 | Sleep duration histogram | lifestyle |
-| Wellbeing gauge | lifestyle |
-| Stress vs sleep quality scatter | lifestyle |
-| Sleep duration timeline (dual axis with stress) | lifestyle |
-| Sleep category donut | lifestyle |
+| Sleep quality gauge | lifestyle |
+| Stress vs sleep quality scatter (coloured by duration) | lifestyle |
+| Sleep duration + stress dual-axis timeline | lifestyle |
+| Wellbeing index gauge | lifestyle |
+| Sleep category donut (4-tier) | lifestyle |
 | BMI category bar | lifestyle |
-| Burnout risk by industry | profession |
-| Work hours vs sleep scatter (joined) | lifestyle + profession |
+| Activity level by persona (stacked bar) | lifestyle |
+| Hydration status donut | lifestyle |
+| Burnout risk index by industry | profession |
+| Work hours vs sleep scatter (coloured by stress) | lifestyle + profession |
 | Remote vs onsite pie | profession |
+| Overwork % by industry bar | profession |
 | Lifestyle factors correlation bar | lifestyle |
 | Sleep disorder prevalence donut | personal |
+| Gender distribution donut | personal |
 | Age group bar | personal |
-| Activity level by persona stacked bar | lifestyle |
-| Hydration status donut | lifestyle |
-| Overwork % by industry bar | profession |
+| Work stress by industry bar | profession |
 
 ---
 
 ## Key Engineering Decisions
 
 **Why KRaft over Zookeeper?**
-Zookeeper requires a separate process, heap allocation, and port. KRaft embeds the metadata quorum inside Kafka — one fewer failure point, and Kafka 4.x dropped Zookeeper entirely.
+KRaft embeds the metadata quorum inside Kafka — one fewer process, one fewer failure point. Kafka 4.x dropped Zookeeper entirely; KRaft is the forward-compatible choice.
 
-**Why two EC2 instances instead of one?**
-A t3.micro has 1GB RAM. Kafka needs 512MB heap, PySpark needs 700MB+ driver memory. Running both causes OOM kills. Separation mirrors production practice of isolating stateful services.
+**Why Scala 2.12 connector?**
+PySpark 3.5.x ships with Scala 2.12. Using `spark-sql-kafka-0-10_2.13` causes `NoSuchMethodError` at runtime. The connector Scala version must match PySpark's Scala build — not the latest available.
 
-**Why IAM roles instead of access keys?**
-Access keys in code can be leaked via logs, git commits, or process listings. IAM roles attach to the EC2 instance — credentials are fetched from the metadata endpoint and rotate every 6 hours automatically.
+**Why env-var paths instead of hardcoded?**
+Hardcoded Windows paths break immediately on EC2 (Linux). `OUTPUT_BASE` and `CHECKPOINT_BASE` environment variables make the same codebase run identically locally and in the cloud.
 
-**Why Parquet instead of JSON on S3?**
-Columnar storage enables predicate pushdown — reading only `sleep_quality` from 1M records scans one column, not all. Snappy compression reduces storage 60–70% vs raw JSON.
+**Why dropDuplicates on [user_id, timestamp]?**
+`user_id` alone would keep only one record per user forever. The composite key deduplicates true Kafka at-least-once redeliveries without discarding legitimate repeat events from the same user.
 
-**Why outputMode append and not complete?**
-Complete mode recomputes the entire dataset on every trigger — expensive and incorrect for unbounded streams without aggregation. Append writes only new records, which is correct for raw event storage.
-
-**Why dropDuplicates on [user_id, timestamp] and not user_id alone?**
-The same user generates multiple records over time. Deduplication on user_id alone would keep only one record per user forever. The composite key deduplicates true Kafka at-least-once redeliveries without discarding legitimate repeat events.
-
----
-
-## Cost Estimate (Cloud)
-
-| Resource | Cost |
-|---|---|
-| EC2 #1 t2.micro (Kafka) | $0 — free tier |
-| EC2 #2 t3.micro (Spark) | ~$7.50/month |
-| S3 under 5GB | $0 — free tier |
-| **Total** | **~$7.50/month** |
-
-Stop instances when not in use — stopped EC2 costs $0/hr.
+**Why fixed BMI in the user pool?**
+If BMI is drawn independently in each generator, the same user can have BMI 24.0 in the lifestyle topic (weight 72 kg) and BMI 28.0 in the personal topic (weight 84 kg). Storing it once in the user pool makes all three topics internally consistent.
 
 ---
 
@@ -361,11 +302,10 @@ Stop instances when not in use — stopped EC2 costs $0/hr.
 
 | Error | Cause | Fix |
 |---|---|---|
-| `spark-submit: command not found` | PySpark bin not on PATH | `export PATH=$PATH:$(python3 -c "import pyspark,os; print(os.path.join(os.path.dirname(pyspark.__file__),'bin'))")` |
-| `HADOOP_HOME unset` | Missing winutils on Windows | Download winutils.exe + hadoop.dll to `C:\hadoop\bin\`, set `HADOOP_HOME=C:\hadoop` |
-| `NoSuchMethodError: wrapRefArray` | Scala version mismatch | Use `spark-sql-kafka-0-10_2.12` not `_2.13` — must match PySpark Scala build |
-| `KafkaTimeoutError` | advertised.listeners is localhost but Spark is remote | Set advertised.listeners to EC2 public IP in server.properties |
-| `Connection timed out port 9092` | Security group missing rule | Add inbound TCP 9092 0.0.0.0/0 to Kafka EC2 security group |
-| `Disk quota exceeded` on pip install | /tmp partition too small | `TMPDIR=/home/ubuntu pip3 install pyspark==3.5.3 --break-system-packages` |
-| S3 permission denied | IAM role not attached | EC2 → Actions → Security → Modify IAM Role → select ec2-s3-spark-role |
-| Checkpoint conflict error | Old checkpoint from different schema | Delete checkpoint folder and recreate — `rm -rf checkpoints/` |
+| `NoBrokersAvailable` | Kafka not ready yet | Producers retry with backoff — wait 30s |
+| `NoSuchMethodError: wrapRefArray` | Scala mismatch | Ensure connector is `2.12` not `2.13` |
+| `HADOOP_HOME unset` | Missing winutils | Download `winutils.exe` to `C:\hadoop\bin\` |
+| `spark-submit: not found` | PySpark bin not on PATH | Run `where spark-submit` — add PySpark bin to PATH |
+| Checkpoint conflict | Schema changed | Delete `checkpoints/` folder and restart Spark |
+| Dashboard shows "Waiting for data" | Parquet not written yet | Wait 30–60s for first Spark micro-batch |
+| `docker: command not found` | Docker Desktop not running | Start Docker Desktop, wait for engine to be ready |

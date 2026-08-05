@@ -1,54 +1,93 @@
+# producers/lifestyle_producer.py
+"""
+Streams lifestyle/sleep records to the 'sleep-lifestyle' Kafka topic.
+Interval: every 2 seconds (one random user per tick).
+"""
+
 import json
 import time
-import random
+import logging
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
 from kafka import KafkaProducer
-from utils.data_generator import (
-    get_user_pool,
-    gen_lifestyle_record
+from kafka.errors import KafkaError, NoBrokersAvailable
+
+# Allow running from project root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.data_generator import get_user_pool, gen_lifestyle_record
+
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
+TOPIC             = "sleep-lifestyle"
+INTERVAL_SEC      = 2
+MAX_RETRIES       = 5
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [lifestyle] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
 )
+log = logging.getLogger(__name__)
 
-TOPIC = "sleep-lifestyle"
-INTERVAL = 2  # seconds between messages
 
-# Pool of synthetic users
-USERS = get_user_pool(200)
+def make_producer(retries=MAX_RETRIES):
+    """Create a KafkaProducer with exponential back-off on connection failure."""
+    for attempt in range(1, retries + 1):
+        try:
+            producer = KafkaProducer(
+                bootstrap_servers=BOOTSTRAP_SERVERS,
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                key_serializer=lambda k: k.encode("utf-8"),
+                acks="all",
+                retries=3,
+                linger_ms=5,
+            )
+            log.info("Connected to Kafka at %s", BOOTSTRAP_SERVERS)
+            return producer
+        except NoBrokersAvailable:
+            wait = 2 ** attempt
+            log.warning("Kafka not reachable (attempt %d/%d). Retrying in %ds …",
+                        attempt, retries, wait)
+            time.sleep(wait)
+    log.error("Could not connect to Kafka after %d attempts. Exiting.", retries)
+    sys.exit(1)
 
-producer = KafkaProducer(
-    bootstrap_servers="localhost:9092",
-    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-    key_serializer=lambda k: k.encode("utf-8"),
-)
 
-print(f"[lifestyle_producer] streaming to topic '{TOPIC}' every {INTERVAL}s ...")
+def on_send_error(exc):
+    log.error("Failed to send record: %s", exc)
 
-try:
-    while True:
-        # Pick full user object
-        user = random.choice(USERS)
 
-        # Generate record using full user dict
-        record = gen_lifestyle_record(user)
+def main():
+    users    = get_user_pool()
+    producer = make_producer()
+    sent     = 0
 
-        # Send using user_id as Kafka key
-        producer.send(
-            TOPIC,
-            key=user["user_id"],
-            value=record
-        )
+    log.info("Lifestyle producer started → topic: %s  interval: %ds", TOPIC, INTERVAL_SEC)
 
-        print(
-            f" → sent: user={user['user_id'][:8]}... "
-            f"sleep={record['sleep_duration_hrs']}h "
-            f"quality={record['sleep_quality']}"
-        )
+    try:
+        while True:
+            user   = users[sent % len(users)]
+            record = gen_lifestyle_record(user)
 
-        time.sleep(INTERVAL)
+            producer.send(
+                TOPIC,
+                key=record["user_id"],
+                value=record,
+            ).add_errback(on_send_error)
 
-except KeyboardInterrupt:
-    print("Stopped.")
-    producer.close()
+            sent += 1
+            if sent % 50 == 0:
+                log.info("Sent %d lifestyle records", sent)
+
+            time.sleep(INTERVAL_SEC)
+
+    except KeyboardInterrupt:
+        log.info("Shutting down lifestyle producer (sent %d records total).", sent)
+    finally:
+        producer.flush()
+        producer.close()
+
+
+if __name__ == "__main__":
+    main()

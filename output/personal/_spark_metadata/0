@@ -1,3 +1,0 @@
-v1
-{"path":"file:///D:/CDAC%20Projects/sleep-pipeline/output/personal/part-00000-80038034-e437-4d43-84dc-9a1e363de883-c000.snappy.parquet","size":1690,"isDir":false,"modificationTime":1779896634234,"blockReplication":1,"blockSize":33554432,"action":"add"}
-{"path":"file:///D:/CDAC%20Projects/sleep-pipeline/output/personal/part-00001-7de11860-e873-4570-bda9-d6958d600eb9-c000.snappy.parquet","size":4667,"isDir":false,"modificationTime":1779896634386,"blockReplication":1,"blockSize":33554432,"action":"add"}

@@ -1,54 +1,90 @@
+# producers/personal_producer.py
+"""
+Streams personal/demographic records to the 'personal-info' Kafka topic.
+Interval: every 5 seconds (one random user per tick).
+"""
+
 import json
 import time
-import random
+import logging
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
 from kafka import KafkaProducer
-from utils.data_generator import (
-    get_user_pool,
-    gen_personal_record
+from kafka.errors import NoBrokersAvailable
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.data_generator import get_user_pool, gen_personal_record
+
+BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
+TOPIC             = "personal-info"
+INTERVAL_SEC      = 5
+MAX_RETRIES       = 5
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [personal ] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
 )
+log = logging.getLogger(__name__)
 
-TOPIC = "personal-info"
-INTERVAL = 5
 
-# Pool of synthetic users
-USERS = get_user_pool(200)
+def make_producer(retries=MAX_RETRIES):
+    for attempt in range(1, retries + 1):
+        try:
+            producer = KafkaProducer(
+                bootstrap_servers=BOOTSTRAP_SERVERS,
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                key_serializer=lambda k: k.encode("utf-8"),
+                acks="all",
+                retries=3,
+                linger_ms=5,
+            )
+            log.info("Connected to Kafka at %s", BOOTSTRAP_SERVERS)
+            return producer
+        except NoBrokersAvailable:
+            wait = 2 ** attempt
+            log.warning("Kafka not reachable (attempt %d/%d). Retrying in %ds …",
+                        attempt, retries, wait)
+            time.sleep(wait)
+    log.error("Could not connect to Kafka after %d attempts. Exiting.", retries)
+    sys.exit(1)
 
-producer = KafkaProducer(
-    bootstrap_servers="localhost:9092",
-    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-    key_serializer=lambda k: k.encode("utf-8"),
-)
 
-print(f"[personal_producer] streaming to topic '{TOPIC}' every {INTERVAL}s ...")
+def on_send_error(exc):
+    log.error("Failed to send record: %s", exc)
 
-try:
-    while True:
-        # Pick full user object
-        user = random.choice(USERS)
 
-        # Generate record using full user dict
-        record = gen_personal_record(user)
+def main():
+    users    = get_user_pool()
+    producer = make_producer()
+    sent     = 0
 
-        # Send using user_id as Kafka key
-        producer.send(
-            TOPIC,
-            key=user["user_id"],
-            value=record
-        )
+    log.info("Personal producer started → topic: %s  interval: %ds", TOPIC, INTERVAL_SEC)
 
-        print(
-            f" → sent: user={user['user_id'][:8]}... "
-            f"age={record['age']} "
-            f"country={record['country']}"
-        )
+    try:
+        while True:
+            user   = users[sent % len(users)]
+            record = gen_personal_record(user)
 
-        time.sleep(INTERVAL)
+            producer.send(
+                TOPIC,
+                key=record["user_id"],
+                value=record,
+            ).add_errback(on_send_error)
 
-except KeyboardInterrupt:
-    print("Stopped.")
-    producer.close()
+            sent += 1
+            if sent % 50 == 0:
+                log.info("Sent %d personal records", sent)
+
+            time.sleep(INTERVAL_SEC)
+
+    except KeyboardInterrupt:
+        log.info("Shutting down personal producer (sent %d records total).", sent)
+    finally:
+        producer.flush()
+        producer.close()
+
+
+if __name__ == "__main__":
+    main()
