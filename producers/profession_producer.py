@@ -74,8 +74,8 @@ def main():
             ).add_errback(on_send_error)
 
             sent += 1
-            if sent % 50 == 0:
-                log.info("Sent %d profession records", sent)
+            # Log every record line-by-line so the stream is visible live
+            log.info("#%d -> user=%s", sent, record["user_id"][:8])
 
             time.sleep(INTERVAL_SEC)
 

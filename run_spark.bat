@@ -1,22 +1,23 @@
 @echo off
-cd /d D:\sleep-pipeline
+:: Use the folder this script lives in
+set PROJECT_ROOT=%~dp0
+if "%PROJECT_ROOT:~-1%"=="\" set PROJECT_ROOT=%PROJECT_ROOT:~0,-1%
+cd /d "%PROJECT_ROOT%"
 
 set HADOOP_HOME=C:\hadoop
-set HADOOP_BIN=C:\hadoop\bin
-set OUTPUT_BASE=D:\sleep-pipeline\output
-set CHECKPOINT_BASE=D:\sleep-pipeline\checkpoints
+set OUTPUT_BASE=%PROJECT_ROOT%\output
+set CHECKPOINT_BASE=%PROJECT_ROOT%\checkpoints
 set KAFKA_BOOTSTRAP=localhost:9092
-set PYSPARK_PYTHON=C:\Users\ayush\AppData\Local\Python\pythoncore-3.14-64\python.exe
+set PATH=C:\hadoop\bin;%PATH%
 
-set PATH=%HADOOP_BIN%;%PATH%
+echo PROJECT_ROOT = %PROJECT_ROOT%
+echo HADOOP_HOME  = %HADOOP_HOME%
+echo OUTPUT_BASE  = %OUTPUT_BASE%
 
-echo HADOOP_HOME = %HADOOP_HOME%
-echo HADOOP_BIN  = %HADOOP_BIN%
-echo Verifying winutils...
-if exist "%HADOOP_BIN%\winutils.exe" (
+if exist "C:\hadoop\bin\winutils.exe" (
     echo winutils.exe FOUND
 ) else (
-    echo ERROR: winutils.exe NOT found at %HADOOP_BIN%\winutils.exe
+    echo ERROR: winutils.exe NOT found at C:\hadoop\bin\winutils.exe
     pause
     exit /b 1
 )
