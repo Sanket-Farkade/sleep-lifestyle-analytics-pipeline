@@ -1,6 +1,8 @@
-# Sleep // Health — Real-Time Lifestyle Analytics Pipeline
+# Workforce Wellbeing Analytics — Real-Time Data Pipeline
 
-A real-time data engineering pipeline that streams synthetic health and lifestyle records through Apache Kafka, enriches them on the fly with PySpark Structured Streaming, stores results as Parquet, and visualises live insights on an auto-refreshing Plotly Dash dashboard.
+A real-time data engineering pipeline that streams synthetic health and lifestyle records through Apache Kafka, enriches them on the fly with PySpark Structured Streaming, stores results as Parquet, and visualises aggregate insights on an auto-refreshing Plotly Dash dashboard built for a corporate HR / People Analytics audience.
+
+> **End user:** A corporate HR or wellbeing team — the dashboard surfaces aggregate sleep, stress, and burnout trends across employee groups to identify which departments need intervention, without ever exposing individual data. Conceptually similar to Microsoft Viva Insights or Whoop Unite.
 
 ---
 
@@ -42,7 +44,7 @@ A real-time data engineering pipeline that streams synthetic health and lifestyl
        ┌──────────────────┐     ┌─────────────────────┐
        │   Plotly Dash    │     │   Power BI Desktop  │
        │  localhost:8050  │     │   CSV → .pbix       │
-       │  18 charts       │     │   portfolio file    │
+       │  4 KPIs+8 charts │     │   portfolio file    │
        │  30s refresh     │     └─────────────────────┘
        └──────────────────┘
 ```
@@ -82,13 +84,13 @@ sleep-pipeline/
 │   └── profession_producer.py # profession topic (8s)
 │
 ├── spark/
-│   └── stream_processor.py    # Clean + 26 derived columns + write Parquet
+│   └── stream_processor.py    # Clean + 13 derived columns + write Parquet
 │
 ├── output/                    # Parquet output — auto-created by Spark
 ├── checkpoints/               # Spark checkpoints — auto-created
 ├── powerbi_export/            # CSV export — created by export_to_csv.py
 │
-├── dashboard.py               # Plotly Dash — 18 charts, 30s refresh
+├── dashboard.py               # Plotly Dash — 4 KPIs + 8 charts, 30s refresh
 ├── docker-compose.yml         # Confluent Kafka 7.5.0 + Zookeeper
 ├── start.bat                  # Windows — starts Kafka, topics, producers, dashboard
 ├── run_spark.bat              # Windows — starts Spark separately
@@ -119,6 +121,8 @@ pip install -r requirements.txt
 
 ### Start the pipeline
 
+The pipeline runs in two steps. `start.bat` handles everything except Spark; `run_spark.bat` runs Spark in its own window (this separation avoids a Windows environment-variable inheritance bug that crashed Spark when launched from within start.bat).
+
 **Step 1 — Start Kafka, topics, producers and dashboard:**
 ```bat
 start.bat
@@ -133,15 +137,15 @@ First run downloads the Kafka JAR (~50MB) — takes 1-3 minutes.
 
 **Dashboard:** http://localhost:8050
 
-Allow 2-3 minutes for data to accumulate across all charts.
+Allow 2-3 minutes for data to accumulate across all charts. The dashboard reads from disk, so it keeps showing historical data even when the stream is stopped.
 
-### Verify Kafka is receiving data
+### Watch a Kafka topic stream live
 
 ```bat
-docker exec sleep-kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic sleep-lifestyle --from-beginning --max-messages 3
+docker exec sleep-kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic sleep-lifestyle
 ```
 
-Expected: 3 JSON records printed, then exits.
+Records stream in line by line. Add `--from-beginning --max-messages 3` to just sample a few and exit.
 
 ### Stop everything
 
@@ -201,63 +205,60 @@ Close the producer and Spark windows manually.
 
 ---
 
-## PySpark Derived Columns (26 total)
+## PySpark Derived Columns (13 total)
 
-### Lifestyle (10)
+The column set is deliberately focused on metrics a People Analytics team would act on — group-level wellbeing and burnout signals, not individual detail.
+
+### Lifestyle (5)
 | Column | Logic |
 |---|---|
 | sleep_category | insufficient / borderline / optimal / excessive (CDC 4-tier) |
-| sleep_efficiency_score | (duration/9 × 50) + (quality/10 × 50) |
-| wellbeing_index | (sleep_quality + mood + (11−stress)) / 3 |
+| wellbeing_index | (sleep_quality + mood + (11−stress)) / 3 — primary composite KPI |
 | stress_tier | low / moderate / high |
 | bmi_category | WHO: underweight / normal / overweight / obese |
-| activity_level | sedentary / lightly_active / active / very_active |
 | high_stimulant_flag | caffeine ≥ 200mg AND screen ≥ 60 min before bed |
-| hydration_status | dehydrated / adequate / well_hydrated |
-| alcohol_risk_flag | ≥ 4 units (NHS binge threshold) |
-| bedtime_shift | early / normal / late / very_late |
 
-### Profession (9)
+### Profession (5)
 | Column | Logic |
 |---|---|
 | burnout_risk_index | Weighted 0–100: hours(40%) + stress(40%) + wlb(20%) |
 | burnout_risk_label | low / moderate / high / critical |
 | overwork_flag | work_hours > 10 |
-| work_intensity_score | hours×50 + meetings×25 + screen×25 |
 | stress_tier | low / moderate / high |
 | meeting_load | light / moderate / heavy |
-| commute_burden | none / low / moderate / high |
-| income_tier | ordinal 1–6 |
-| screen_overuse_flag | screen_time_hrs > 8 |
 
-### Personal (7)
-`bmi_derived, bmi_category, age_group, life_stage, health_risk_score (0–3), has_sleep_disorder, is_smoker`
+### Personal (3)
+| Column | Logic |
+|---|---|
+| age_group | 18-24 / 25-34 / 35-49 / 50-64 / 65+ |
+| health_risk_score | Additive 0–3: smoker (+1), chronic condition (+1), on medications (+1) |
+| has_sleep_disorder | sleep_disorder != none |
 
 ---
 
-## Dashboard — 18 Charts
+## Dashboard — 4 KPIs + 8 Charts
 
-| Chart | Source |
+Reframed as a People Analytics tool. The header states the privacy posture explicitly: aggregate view across employee groups, no individual data.
+
+### KPIs
+| KPI | Source |
 |---|---|
-| 5 KPI cards: records, sleep, quality, stress, wellbeing | lifestyle |
-| Sleep duration histogram | lifestyle |
-| Sleep quality gauge | lifestyle |
-| Stress vs sleep quality scatter | lifestyle |
-| Sleep duration + stress timeline | lifestyle |
-| Wellbeing index gauge | lifestyle |
-| Sleep category donut (4-tier) | lifestyle |
-| BMI category bar | lifestyle |
-| Activity level by persona (stacked) | lifestyle |
-| Hydration status donut | lifestyle |
-| Burnout risk by industry | profession |
-| Work hours vs sleep scatter | lifestyle + profession |
-| Remote vs onsite pie | profession |
-| Overwork % by industry | profession |
-| Lifestyle factors correlation bar | lifestyle |
-| Sleep disorder prevalence donut | personal |
-| Gender distribution donut | personal |
-| Age group bar | personal |
-| Work stress by industry | profession |
+| Employees Tracked | profession |
+| Avg Wellbeing (/10) | lifestyle |
+| Avg Burnout Risk (/100) | profession |
+| % Overworked | profession |
+
+### Charts
+| Chart | Source | Insight |
+|---|---|---|
+| Burnout Risk by Industry | profession | Which departments are at critical burnout |
+| Overwork Rate by Industry | profession | % of each group working >10 hrs/day |
+| Wellbeing Index by Industry | lifestyle + profession | Composite wellbeing per department (join on user_id) |
+| Work Stress by Industry | profession | Average work stress per department |
+| Sleep Adequacy Across Workforce | lifestyle | insufficient / borderline / optimal / excessive split |
+| Stress Tier Distribution | lifestyle | low / moderate / high breakdown |
+| Gender Distribution | personal | Diversity lens |
+| Age Group Breakdown | personal | Diversity lens |
 
 ---
 
@@ -266,12 +267,10 @@ Close the producer and Spark windows manually.
 After running the pipeline for a few minutes:
 
 ```bat
-cd D:\sleep-pipeline
-set OUTPUT_BASE=D:\sleep-pipeline\output
 python utils/export_to_csv.py
 ```
 
-Creates `powerbi_export/lifestyle.csv`, `personal.csv`, `profession.csv`.
+Creates `powerbi_export/lifestyle.csv`, `personal.csv`, `profession.csv` (skips zero-byte and `.crc` files automatically).
 
 In Power BI Desktop:
 1. Get Data → Text/CSV → load all three files
@@ -282,8 +281,11 @@ In Power BI Desktop:
 
 ## Key Engineering Decisions
 
+**Why partition Kafka by user_id?**
+The partition key decides which partition a record lands on via `murmur2(key) % partitions`. Keying by user_id keeps all of a user's events on one partition — preserving per-user ordering and keeping the three topics joinable. user_id is a high-cardinality UUID, so it also distributes evenly across partitions and avoids hot partitions. A low-cardinality key like industry would overload one partition.
+
 **Why Confluent cp-kafka with Zookeeper?**
-Confluent's `cp-kafka:7.5.0` and `cp-zookeeper:7.5.0` images were already available locally — no download required. Production-grade, well-documented images used widely in enterprise environments.
+Confluent's `cp-kafka:7.5.0` and `cp-zookeeper:7.5.0` images were already available locally — no download required. Production-grade, widely used images.
 
 **Why Scala 2.12 connector?**
 PySpark 3.5.x ships compiled against Scala 2.12. Using `spark-sql-kafka-0-10_2.13` causes `NoSuchMethodError` at runtime. The connector version must match PySpark's Scala build exactly.
@@ -300,6 +302,9 @@ Drawing BMI independently in each generator would give the same user different w
 **Why env-var paths?**
 Hardcoded Windows paths break on EC2 (Linux). `OUTPUT_BASE` and `CHECKPOINT_BASE` as environment variables make the same codebase run on both platforms without changes.
 
+**Why synthetic data?**
+Real health data is protected by HIPAA/GDPR. In production, sleep and activity data would come from wearables (Oura, Whoop) and work-hours data from passive calendar/badge signals; only soft signals like mood would be self-reported, kept anonymous and aggregate to remove any incentive to misreport.
+
 ---
 
 ## Troubleshooting
@@ -310,8 +315,9 @@ Hardcoded Windows paths break on EC2 (Linux). `OUTPUT_BASE` and `CHECKPOINT_BASE
 | `kafka-topics.sh not found` | Confluent uses no `.sh` suffix | Use `kafka-topics` |
 | `ModuleNotFoundError: kafka.vendor.six.moves` | kafka-python broken on Python 3.12+ | `pip install kafka-python-ng` |
 | `NoSuchMethodError: wrapRefArray` | Scala version mismatch | Use `spark-sql-kafka-0-10_2.12` not `2.13` |
-| `Hadoop bin does not exist` | HADOOP_HOME has trailing space or not set | Set `HADOOP_HOME=C:\hadoop` as system variable, verify with `echo "%HADOOP_HOME%"` |
+| `Hadoop bin does not exist` | HADOOP_HOME has trailing space or not set | Set `HADOOP_HOME=C:\hadoop` as a system variable; verify with `echo "%HADOOP_HOME%"` |
 | `spark-submit not found` | PySpark bin not on PATH | Use `run_spark.bat` which hardcodes the path |
-| Dashboard blank on startup | Zero-byte Parquet placeholder files | Fixed in dashboard.py — skips 0-byte files automatically |
+| Dashboard blank on startup | Zero-byte Parquet placeholder files | Handled in dashboard.py — skips 0-byte and `.crc` files automatically |
 | Dashboard shows old data | Spark not running | Run `run_spark.bat` to write fresh Parquet batches |
-| Checkpoint conflict | Schema changed since last run | Delete `checkpoints/` folder and restart Spark |
+| `container name already in use` | Leftover containers from previous run | start.bat now cleans up automatically; or run `docker rm -f sleep-kafka sleep-zookeeper` |
+| Checkpoint conflict after schema change | Old checkpoint expects old schema | Delete `checkpoints/` folder and restart Spark |
