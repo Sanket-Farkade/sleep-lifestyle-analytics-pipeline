@@ -26,7 +26,7 @@ A real-time data engineering pipeline that streams synthetic health and lifestyl
 ┌─────────────────────────────────────────────────────────────────┐
 │                 PYSPARK STRUCTURED STREAMING                    │
 │   Reads 3 topics in parallel — 30s micro-batch trigger          │
-│   Schema validation → Cleaning → 26 derived columns             │
+│   Schema validation → Cleaning → 13 derived columns             │
 │   dropDuplicates[user_id, timestamp]                            │
 │   Snappy-compressed Parquet, append mode                        │
 └──────────────────────────────┬──────────────────────────────────┘
